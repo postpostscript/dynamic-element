@@ -1,12 +1,16 @@
 export type TemplateContextMap = WeakMap<HTMLTemplateElement, TemplateContext>;
 
+export type CompiledFunction = Function & {
+  source: any;
+};
+
 /** Cached template computations */
 export type TemplateContext = {
   /** Pre-transformed fragment from source template */
   fragment: DocumentFragment;
 
   /** Functions replacing original template scripts */
-  methods: Set<Function>;
+  methods: Set<CompiledFunction>;
 
   attrs: {
     [name: string]: string[] | undefined;
@@ -57,6 +61,7 @@ export default class DynamicElement extends HTMLElement {
       attrs: Object.fromEntries(
         array(template.attributes, (attr) => [attr.name, [attr.value]])
       ),
+      name: template.getAttribute("id"),
     };
 
     withQuerySelectorAll(
@@ -68,7 +73,9 @@ export default class DynamicElement extends HTMLElement {
           if (type === "module") {
             code = `return(async()=>${code})()`;
           }
-          result!.methods.add(Function(code));
+          const method = Function(code) as CompiledFunction;
+          method.source = template;
+          result!.methods.add(method);
           script.remove();
         }
       },
@@ -88,8 +95,10 @@ export default class DynamicElement extends HTMLElement {
 
   static combine(templateContexts: TemplateContext[]): TemplateContext {
     const fragment: TemplateContext["fragment"] = new DocumentFragment();
-    const methods = new Set<Function>();
+    const methods = new Set<CompiledFunction>();
     const attrs: TemplateContext["attrs"] = {};
+
+    console.log("combine", templateContexts);
 
     templateContexts.forEach((context) => {
       fragment.append(context.fragment);
@@ -106,6 +115,7 @@ export default class DynamicElement extends HTMLElement {
       fragment,
       methods,
       attrs,
+      name: templateContexts.map((c) => c.name).join(", "),
     };
   }
 
@@ -116,7 +126,7 @@ export default class DynamicElement extends HTMLElement {
   }
 
   /** Instance ID used in `DynamicElement.instance` */
-  public id: string = crypto.randomUUID();
+  public _id: string = crypto.randomUUID();
 
   /** Shared copy of the source template context */
   public compile(): TemplateContext {
@@ -135,22 +145,27 @@ export default class DynamicElement extends HTMLElement {
     this.methods = array(methods);
     // execute init script after all of the DOM loads
     const newScript = document.createElement("script");
-    newScript.innerHTML = `DynamicElement.instance["${this.id}"].init()`;
+    newScript.innerHTML = `DynamicElement.instance["${this._id}"].init()`;
     fragment.append(newScript);
 
     return fragment;
   }
 
   /** Execute the script Function equivalents with `this` accessible */
-  public init() {
-    const instance = this;
-    let fn;
-    while ((fn = instance.methods.shift())) {
-      const result = fn.call(instance);
-      if (result instanceof Promise) {
-        return result.then(instance.init.bind(instance));
+  #init = Promise.resolve();
+  public async init() {
+    this.#init = this.#init.then(() => {
+      const instance = this;
+      let fn: Function;
+      while ((fn = instance.methods.shift()!)) {
+        try {
+          const result = fn.call(instance);
+          console.log({ code: fn.toString(), result });
+        } catch (error) {
+          instance.errorCallback(fn as CompiledFunction, error);
+        }
       }
-    }
+    });
   }
 
   /** Alias for shadowRoot */
@@ -162,7 +177,7 @@ export default class DynamicElement extends HTMLElement {
 
   connectedCallback() {
     const instance = this;
-    DynamicElement.instance[instance.id] = instance;
+    DynamicElement.instance[instance._id] = instance;
     if (instance.#fragment) {
       queueMicrotask(instance.init.bind(instance));
     } else {
@@ -170,11 +185,48 @@ export default class DynamicElement extends HTMLElement {
       instance.#shadow.append(instance.#fragment);
     }
     instance.methods.push(() => {
-      instance.dispatchEvent(new CustomEvent("connected"));
+      instance.#dispatch("connected");
     });
   }
   disconnectedCallback() {
-    delete DynamicElement.instance[this.id];
-    this.dispatchEvent(new CustomEvent("disconnected"));
+    delete DynamicElement.instance[this._id];
+    this.#dispatch("disconnected");
+  }
+
+  errorCallback(fn: CompiledFunction, error: Error) {
+    let location: [line: number, column: number] = [
+      error.lineNumber,
+      error.columnNumber,
+    ]; // firefox
+
+    if (!location[0]) {
+      // chrome
+      const match =
+        error.stack?.match(/anonymous\>:(\d+):(\d+)[^\n]*(\n[^\n]*init|$)/) ??
+        [];
+      location = [parseInt(match[1]), parseInt(match[2])];
+    }
+
+    const context = location[0]
+      ? [
+          fn.source,
+          "\n" +
+            `${fn}`.split(/\n/g).at(location[0] - 1) +
+            "\n" +
+            " ".repeat(location[1] - 1) +
+            `^\n`,
+        ]
+      : [];
+
+    console.error("Error in", this, ...context, error);
+    this.#dispatch("error", {
+      detail: {
+        error,
+      },
+    });
+  }
+
+  #dispatch(type: string, eventInitDict?: CustomEventInit): boolean {
+    return this.dispatchEvent(new CustomEvent(type, eventInitDict));
   }
 }

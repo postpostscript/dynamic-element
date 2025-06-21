@@ -1,5 +1,6 @@
 <template id="x-events" extend="#x-instance">
   <script type="module">
+    console.log("start with events");
     this.createEventListeners = (elements) => {
       const names = new Set();
       new Set(elements).forEach((element) => {
@@ -16,10 +17,13 @@
       });
     };
 
-    this.nextTick(() => {
+    queueMicrotask(async () => {
+      await this.init();
       this.createEventListeners(
         this.shadowRoot.querySelectorAll("*:not(script):not(template)")
       );
     });
+
+    console.log("done with events");
   </script>
 </template>

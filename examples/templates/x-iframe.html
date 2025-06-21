@@ -1,0 +1,57 @@
+<template id="x-iframe">
+  <script>
+    const src =
+      `
+        here!
+
+        <style>
+            *{box-sizing: border-box}
+            html {
+                width: 100%;
+                height: 100%;
+                border: 1px solid red;
+            }
+        </style>
+    ` +
+      "<" +
+      `script>
+
+window.addEventListener(
+  "message",
+  (event) => {
+  console.log(event)
+    // Do we trust the sender of this message? (might be
+    // different from what we originally opened, for example).
+    if (event.origin !== "http://example.com") return;
+
+    // event.source is popup
+    // event.data is "hi there yourself! the secret response is: rheeeeet!"
+  },
+  false,
+);
+
+        </script` +
+      ">";
+
+    const $iframe = this.shadowRoot.querySelector("iframe");
+    $iframe.setAttribute("sandbox", "allow-scripts");
+    $iframe.setAttribute("srcdoc", src);
+
+    setTimeout(() => {
+      $iframe.contentWindow.postMessage("test", "*");
+    }, 1000);
+  </script>
+
+  <iframe
+    sandbox="allow-scripts allow-same-origin"
+    frameborder="0"
+    scrolling="no"
+  ></iframe>
+
+  <style>
+    iframe {
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</template>

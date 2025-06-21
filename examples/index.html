@@ -52,126 +52,34 @@
       DynamicElement.install("x-is");
     </script>
 
-    <x-is src="#x-iframe" width="500px" height="500px"></x-is>
+    <!-- <x-is src="#x-iframe" width="500px" height="500px"></x-is> -->
 
-    <template
-      id="some-random-template"
-      extend="#x-props, #x-events, #x-render"
-      observe="x number, y number, z number, calculation"
-    >
+    <template id="some-random-template" extend="#x-reactive, #x-events">
       <script>
         let entries = 0;
+        const $log = this.shadowRoot.getElementById("log");
+        console.log(this);
         this.watch(
           () => JSON.stringify(this.$props) + "\n",
           (text) => {
-            this.$.log.append(document.createTextNode(text));
+            $log.append(document.createTextNode(text));
             entries++;
             if (entries > 5) {
-              this.$.log.childNodes[0].remove();
+              $log.childNodes[0].remove();
             }
           }
         );
 
-        this.result = this.toComputed(() => {
-          try {
-            return this.eval(this.calculation);
-          } catch (e) {
-            return e.toString();
-          }
-        });
+        this.result = this.toComputed(() => this.eval(this.calculation));
       </script>
 
-      <div>
-        <label id="calculation">
-          <h2>Calculation:</h2>
-          <input
-            :value="this.calculation"
-            @input="this.calculation = event.target.value"
-          />
-        </label>
-        <div>
-          <h2>Inputs:</h2>
-
-          <div class="inputs">
-            <label>
-              X = {{ this.x }}:
-              <input
-                :value="this.x"
-                @input="this.x = parseInt(event.target.value)"
-                type="range"
-                max="9"
-              />
-            </label>
-
-            <label>
-              Y = {{ this.y }}:
-              <input
-                :value="this.y"
-                @input="this.y = parseInt(event.target.value)"
-                type="range"
-                max="9"
-              />
-            </label>
-
-            <label>
-              Z = {{ this.z }}:
-              <input
-                :value="this.z"
-                @input="this.z = parseInt(event.target.value)"
-                type="range"
-                max="9"
-              />
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <p>
-        <output> Result: <strong>{{ this.result.get() }}</strong> </output>
-      </p>
-
-      <h2>State log:</h2>
-      <pre id="log"></pre>
-
-      <style>
-        h2 {
-          margin-bottom: 1rem;
-        }
-        :host > div {
-          display: flex;
-          gap: 5rem;
-        }
-        .inputs label {
-          display: flex;
-          gap: 1rem;
-          font-variant-numeric: tabular-nums;
-        }
-
-        #calculation,
-        input {
-          flex: 1;
-        }
-
-        #calculation input {
-          width: 100%;
-          height: 8rem;
-          padding-inline-start: 1rem;
-          font-size: 1.1em;
-        }
-
-        p {
-          text-align: center;
-        }
-        #log {
-          white-space: pre-wrap;
-          word-wrap: break-word;
-        }
-      </style>
+      <div></div>
     </template>
 
     <x-define src="#some-random-template" name="reactive-test"> </x-define>
 
     <main>
+      <!--
       <x-is src="#app">
         <template
           id="app"
@@ -187,15 +95,9 @@
             });
           </script>
 
-          <reactive-test
-            id="reactiveTest"
-            model:x="this.x"
-            model:y="this.y"
-            model:z="this.z"
-            model:calculation="this.calculation"
-          ></reactive-test>
-        </template>
-      </x-is>
+</template>
+</x-is> -->
+      <reactive-test id="reactiveTest"></reactive-test>
     </main>
   </body>
 </html>

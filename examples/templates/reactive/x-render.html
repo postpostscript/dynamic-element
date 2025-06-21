@@ -1,5 +1,6 @@
 <template id="x-render" extend="#x-reactive">
   <script type="module">
+    console.log("start re");
     let redoEventListeners = [];
 
     const walk = (node) => {
@@ -89,9 +90,11 @@
       node.childNodes.forEach(walk);
     };
 
-    this.nextTick(() => {
+    queueMicrotask(async () => {
+      await this.init();
       walk(this.shadowRoot);
       this.createEventListeners(redoEventListeners);
     });
+    console.log("done with re");
   </script>
 </template>

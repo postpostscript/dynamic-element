@@ -1,32 +1,33 @@
 <template id="x-instance">
   <script>
-    this.__proto__.eval ??= function (code, args = {}) {
-      return Function(
-        ...Object.keys(args),
-        `"use strict";return (${code});`
-      ).apply(this, Object.values(args));
-    };
-
-    this.$ ??= new Proxy(
-      {},
-      {
-        get: (target, id) => {
-          return this.shadowRoot.getElementById(id);
-        },
-        has: (target, id) => {
-          return !!this.shadowRoot.getElementById(id);
-        },
+    this.__proto__.eval__methods ??= {};
+    this.__proto__.eval__maxCache ??= 10;
+    this.__proto__.eval__prepareCode ??= function (code, argNames) {
+      const key = code + JSON.stringify(argNames.sort());
+      const value = this.eval__methods[key];
+      if (value) {
+        return value;
       }
-    );
 
-    this.__proto__.nextTick ??= function (callback) {
-      return new Promise((resolve) => {
-        callback && this.methods.push(callback);
-        queueMicrotask(async () => {
-          await this.init.bind(this);
-          resolve();
-        });
-      });
+      const keys = Object.keys(this.eval__methods);
+      while (keys.length > this.eval__maxCache) {
+        delete this.eval__methods[keys.shift()];
+      }
+
+      this.eval__methods[key] = {
+        argNames,
+        fn: Function(...argNames, `"use strict";return (${code});`),
+      };
+
+      return this.eval__methods[key];
+    };
+    this.__proto__.eval ??= function (code, args = {}) {
+      const { argNames, fn } = this.eval__prepareCode(code, Object.keys(args));
+
+      return fn.apply(
+        this,
+        argNames.map((key) => args[key])
+      );
     };
   </script>
 </template>

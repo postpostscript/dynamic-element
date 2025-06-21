@@ -1,8 +1,10 @@
 <template id="x-reactive" extend="#x-instance">
   <script type="module">
+    console.log("load reactive");
     const { Signal } = await import(
       "https://esm.sh/signal-polyfill@0.2.2/es2022/signal-polyfill.mjs"
     );
+    console.log("loaded signal");
 
     this.__proto__.toSignal ??= (value) => {
       if (typeof value === "function") {
@@ -19,8 +21,10 @@
     };
 
     this.__proto__.SYMBOL_RAW = Symbol("raw");
+    const { SYMBOL_RAW } = this.__proto__;
     this.__proto__.toReactive ??= (object) => {
-      if (this.SYMBOL_RAW in object) {
+      console.log(object);
+      if (SYMBOL_RAW in object) {
         return object;
       }
 
@@ -32,7 +36,7 @@
 
       const result = new Proxy(object, {
         get: (target, prop) => {
-          if (prop === this.SYMBOL_RAW) {
+          if (prop === SYMBOL_RAW) {
             return target;
           }
           return signals[prop]?.get();
@@ -44,7 +48,7 @@
               _value = value;
               raw = value[SYMBOL_RAW];
             } else {
-              _value = toReactive(value);
+              _value = this.toReactive(value);
               raw = value;
             }
           } else {
@@ -70,15 +74,52 @@
       return result;
     };
 
+    function safeComputedGet() {
+      const result = this.get();
+      if (result.success) {
+        return result.value;
+      } else {
+        throw result.value;
+      }
+    }
     this.__proto__.toComputed ??= (callback) => {
-      return new Signal.Computed(callback);
+      return new Proxy(
+        new Signal.Computed(() => {
+          try {
+            const value = callback();
+            return {
+              success: true,
+              value,
+            };
+          } catch (e) {
+            return {
+              success: false,
+              value: e,
+            };
+          }
+        }),
+        {
+          get(target, p, receiver) {
+            if (p === "get") {
+              return safeComputedGet.bind(target);
+            } else if (p === SYMBOL_RAW) {
+              return target;
+            }
+          },
+        }
+      );
     };
 
     let pending = false;
     const watcher = new Signal.subtle.Watcher(async () => {
       if (!pending) {
         pending = true;
-        await this.nextTick();
+        await new Promise((resolve) => {
+          queueMicrotask(async () => {
+            await this.init();
+            resolve();
+          });
+        });
         pending = false;
 
         for (const signal of watcher.getPending()) {
@@ -94,20 +135,25 @@
 
       const computed = this.toComputed(() => {
         cleanup?.();
-        const result = callback();
-        cleanup = typeof result === "function" ? result : undefined;
+        try {
+          const result = callback();
+          cleanup = typeof result === "function" ? result : undefined;
+        } catch (e) {
+          console.error(e);
+        }
       });
 
-      watcher.watch(computed);
+      watcher.watch(computed[SYMBOL_RAW]);
       computed.get();
 
       return () => {
-        watcher.unwatch(computed);
+        watcher.unwatch(computed[SYMBOL_RAW]);
         cleanup?.();
         cleanup = undefined;
       };
     };
 
+    console.log("set watch");
     this.watch = (source, callback, opts = {}) => {
       const signal = this.toSignal(source);
       const computed = this.toComputed(() => signal.get());
@@ -125,6 +171,7 @@
       });
     };
 
-    this.$props = this.toReactive(this.$props);
+    this.$props = this.toReactive(this.$props ?? {});
+    console.log("done with reactive!");
   </script>
 </template>
