@@ -1,17 +1,24 @@
-<template id="x-props">
-  <script>
-    this.__proto__.props__convertMap = {
+<template
+  id="x-props"
+  plugin:compile:template-unsafe
+  plugin:compile:instance-module
+>
+  <script instance type="module">
+    if (this.constructor === DynamicElement) {
+      throw new Error("x-props can only be used with defined elements");
+    }
+    this.__proto__.props__convertMap ??= {
       number: parseFloat,
       float: parseFloat,
       integer: parseInt,
     };
-    this.__proto__.props__convert = function (type, value) {
+    this.__proto__.props__convert ??= function (type, value) {
       return this.props__convertMap[type]
         ? this.props__convertMap[type](value)
         : value;
     };
     this.__proto__.props__observed ??= Object.fromEntries(
-      this.compile().attrs.observe?.reduce(
+      this.constructor.observedAttributes?.reduce(
         (result, value) =>
           result.concat(
             value.split(/,+/).map((pair) => pair.trim().split(/\s+/))
@@ -23,12 +30,12 @@
     if (!this.__proto__.props__defined) {
       this.__proto__.props__defined = true;
 
-      Object.entries(this.props__observed).forEach(([name, type]) => {
-        Object.defineProperty(this, name, {
-          get: () => {
+      Object.entries(this.__proto__.props__observed).forEach(([name, type]) => {
+        Object.defineProperty(this.__proto__, name, {
+          get() {
             return this.$props[name];
           },
-          set: (value) => {
+          set(value) {
             if (this.$props[name] !== value) {
               this.dispatchEvent(
                 new CustomEvent(`update:${name}`, {
@@ -45,19 +52,13 @@
       });
     }
 
-    this.$props = Object.fromEntries(
-      Object.keys(this.props__observed).map((name) => {
-        return [
-          name,
-          this.props__convert(
-            this.props__observed[name],
-            this.getAttribute(name)
-          ),
-        ];
-      })
-    );
-
-    console.log(this.$props);
+    this.$props ??= {};
+    for (const name in this.props__observed) {
+      this.$props[name] = this.props__convert(
+        this.props__observed[name],
+        this.getAttribute(name)
+      );
+    }
 
     this.addEventListener("attributeChanged", ({ detail: { name, value } }) => {
       this.$props[name] = this.props__convert(

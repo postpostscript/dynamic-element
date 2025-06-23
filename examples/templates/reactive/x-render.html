@@ -1,6 +1,10 @@
-<template id="x-render" extend="#x-reactive">
-  <script type="module">
-    console.log("start re");
+<template
+  id="x-render"
+  plugin:compile:template-unsafe
+  plugin:compile:instance-module
+  plugin:compile:extend-unsafe="query:#x-events, query:#x-reactive, query:#x-instance"
+>
+  <script instance type="module">
     let redoEventListeners = [];
 
     const walk = (node) => {
@@ -91,10 +95,9 @@
     };
 
     queueMicrotask(async () => {
-      await this.init();
+      await this.tick();
       walk(this.shadowRoot);
       this.createEventListeners(redoEventListeners);
     });
-    console.log("done with re");
   </script>
 </template>

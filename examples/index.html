@@ -20,10 +20,267 @@
     </h1>
 
     <div id="templates"></div>
-    <x-is src="#x-define" name="x-define"></x-is>
+    <x-is plugin:compile:query="#x-define">
+      <template plugin:compile:query="#x-define" name="x-define"></template>
+    </x-is>
 
     <script type="module">
+      // @ts-check
       import DynamicElement from "../dist/dynamic-element.js";
+
+      const queryCache = new WeakMap();
+      DynamicElement.registerPlugin(
+        "compile",
+        "query",
+        async function query({ plugins }, selector) {
+          if (!(selector && typeof selector === "string")) {
+            throw new Error(
+              `[compile:query] unknown argument format: "${selector}"`
+            );
+          }
+          /** @type {HTMLTemplateElement} */
+          const source = document.querySelector(selector);
+          if (!source) {
+            throw new Error(
+              `[compile:query] no element found for "${selector}"`
+            );
+          }
+
+          let context = queryCache.get(source);
+          if (!context) {
+            context = DynamicElement.compile(source, {
+              compile: [[DynamicElement.pluginMap.compile["plugins-unsafe"]]],
+            });
+            queryCache.set(source, context);
+          }
+          // TODO: plugins
+          return await context;
+        }
+      );
+
+      DynamicElement.registerPlugin(
+        "compile",
+        "plugins-unsafe",
+        function pluginsUnsafe(context) {
+          if (context.source) {
+            return {
+              plugins: DynamicElement.combinePlugins(
+                context.plugins,
+                DynamicElement.getElementPluginMap(context.source)
+              ),
+            };
+          } else {
+            console.warn(
+              "[compile:plugins-unsafe] context has no source",
+              context
+            );
+          }
+        }
+      );
+
+      DynamicElement.registerPlugin(
+        "compile",
+        "template-unsafe",
+        function templateUsafe(context) {
+          context.fragment.append(context.source.content);
+        }
+      );
+
+      const hasDoneInstance = new WeakMap();
+      DynamicElement.registerPlugin(
+        "compile",
+        "instance",
+        function instance(context) {
+          // if (hasDoneInstance.has(context.fragment)) {
+          //   hasDoneInstance.set(context.fragment, 1);
+          //   alert(
+          //     "wanralksndflnkasdlfnasdklfnalsdlfknasdklnfdklnafklnasdklnfklnsf"
+          //   );
+          // }
+          addPlugin(context.plugins, "init", [
+            DynamicElement.pluginMap.init["instance-methods"],
+          ]);
+          context.methods ??= new Set();
+          context.fragment
+            .querySelectorAll(
+              "script[instance][type='text/javascript'], script[instance]:not([type])"
+            )
+            .forEach((script) => {
+              let code = `{${script.innerHTML}}`;
+              /** @type {Function & { source?: any }} */
+              const method = Function(code);
+              method.source = context.source;
+              context.methods.add(method);
+              script.remove();
+            });
+        }
+      );
+
+      DynamicElement.registerPlugin(
+        "compile",
+        "instance-module",
+        function instanceModule(context) {
+          if (!hasDoneInstance.has(context.source)) {
+            hasDoneInstance.set(context.source, 1);
+          } else {
+            debugger;
+          }
+          addPlugin(context.plugins, "init", [
+            DynamicElement.pluginMap.init["instance-methods"],
+          ]);
+          context.methods ??= new Set();
+          context.fragment
+            .querySelectorAll("script[instance][type='module']")
+            .forEach((script) => {
+              const code = `return(async()=>{${script.innerHTML}})()`;
+              /** @type {Function & { source?: any }} */
+              const method = Function(code);
+              method.source = context.source;
+              context.methods.add(method);
+              script.remove();
+            });
+        }
+      );
+
+      // DynamicElement.registerPlugin("compile", "script-id", ({ context }) => {
+      //   context.fragment
+      //     .querySelectorAll("script:not([src])")
+      //     .forEach((script) => {
+      //       script.innerHTML = `const id = \n`;
+      //     });
+      // });
+
+      function combine(templateContexts) {
+        const fragment = new DocumentFragment();
+        const methods = new Set();
+
+        templateContexts.forEach((context) => {
+          fragment.append(context.fragment);
+          for (const method of context.methods ?? []) {
+            methods.add(method);
+          }
+        });
+
+        return {
+          fragment,
+          methods,
+        };
+      }
+
+      function addPlugin(plugins, type, invocation) {
+        plugins[type] ??= [];
+        plugins[type].push(invocation);
+      }
+
+      DynamicElement.registerPlugin(
+        "compile",
+        "extend-unsafe",
+        async function extendUnsafe(context, extend) {
+          if (!(extend && typeof extend === "string")) {
+            throw new Error(
+              `[compile:extend] unknown argument format: "${extend}"`
+            );
+          }
+
+          Object.assign(
+            context,
+            combine([
+              ...(await Promise.all(
+                extend
+                  .split(",")
+                  .map((str) => str.trim().split(":", 2))
+                  .map(async (invocation) => {
+                    const [name, argument] = invocation;
+                    return DynamicElement.compile(invocation, {
+                      compile: [
+                        [DynamicElement.pluginMap.compile[name], argument],
+                      ],
+                    });
+                  })
+              )),
+              context,
+            ])
+          );
+        }
+      );
+
+      function errorCallback(instance, fn, error) {
+        let location = [error?.lineNumber, error.columnNumber]; // firefox
+
+        if (!location[0]) {
+          // chrome
+          const match =
+            // @ts-ignore
+            error?.stack?.match(
+              /^[^\n]*anonymous\>:(\d+):(\d+)[^\n]*(\n[^\n]*init|$)/
+            ) ?? [];
+          location = [parseInt(match[1]), parseInt(match[2])];
+        }
+
+        const context = location[0]
+          ? [
+              fn.source,
+              "\n" +
+                `${fn}`.split(/\n/g).at(location[0] - 1) +
+                "\n" +
+                " ".repeat(location[1] - 1) +
+                `^\n`,
+            ]
+          : ["\n"];
+
+        console.error("Error in", instance, ...context, error);
+      }
+      DynamicElement.registerPlugin(
+        "init",
+        "instance-methods",
+        async function instanceMethods(instance, argument) {
+          instance.tick ??= (() => {
+            let tickPromise = Promise.resolve();
+            return function () {
+              tickPromise = tickPromise.then(async () => {
+                let fn;
+                while ((fn = this.methods.shift())) {
+                  try {
+                    await fn.call(this);
+                  } catch (e) {
+                    errorCallback(this, fn, e);
+                  }
+                }
+              });
+              return tickPromise;
+            };
+          })();
+
+          instance.methods = Array.from(instance.context.methods);
+          instance.tick();
+        }
+      );
+
+      DynamicElement.registerPlugin(
+        "define",
+        "observe",
+        function observe(context, argument) {
+          context.cls.observedAttributes = (
+            context.cls.observedAttributes ?? []
+          ).concat(argument.split(",").map((str) => str.trim()));
+
+          context.cls.prototype.attributeChangedCallback ??= function (
+            name,
+            old,
+            value
+          ) {
+            this.dispatchEvent(
+              new CustomEvent("attributeChanged", {
+                detail: {
+                  name,
+                  value,
+                  old,
+                },
+              })
+            );
+          };
+        }
+      );
 
       const urls = [
         "templates/x-define.html",
@@ -54,11 +311,17 @@
 
     <!-- <x-is src="#x-iframe" width="500px" height="500px"></x-is> -->
 
-    <template id="some-random-template" extend="#x-reactive, #x-events">
-      <script>
-        let entries = 0;
+    <template
+      id="some-random-template"
+      plugin:compile:template-unsafe
+      plugin:compile:instance
+      plugin:compile:extend-unsafe="query:#x-props, query:#x-events, query:#x-render"
+      plugin:define:observe="x, y, z, calculation"
+    >
+      <script instance>
         const $log = this.shadowRoot.getElementById("log");
-        console.log(this);
+
+        let entries = 0;
         this.watch(
           () => JSON.stringify(this.$props) + "\n",
           (text) => {
@@ -70,24 +333,121 @@
           }
         );
 
-        this.result = this.toComputed(() => this.eval(this.calculation));
+        this.result = this.toComputed(() => {
+          try {
+            return this.eval(this.calculation);
+          } catch (e) {
+            return e.toString();
+          }
+        });
       </script>
 
-      <div></div>
+      <div>
+        <label id="calculation">
+          <h2>Calculation:</h2>
+          <input
+            :value="this.calculation"
+            @input="this.calculation = event.target.value"
+          />
+        </label>
+        <div>
+          <h2>Inputs:</h2>
+
+          <div class="inputs">
+            <label>
+              X = {{ this.x }}:
+              <input
+                :value="this.x"
+                @input="this.x = parseInt(event.target.value)"
+                type="range"
+                max="9"
+              />
+            </label>
+
+            <label>
+              Y = {{ this.y }}:
+              <input
+                :value="this.y"
+                @input="this.y = parseInt(event.target.value)"
+                type="range"
+                max="9"
+              />
+            </label>
+
+            <label>
+              Z = {{ this.z }}:
+              <input
+                :value="this.z"
+                @input="this.z = parseInt(event.target.value)"
+                type="range"
+                max="9"
+              />
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <p>
+        <output> Result: <strong>{{ this.result.get() }}</strong> </output>
+      </p>
+
+      <h2>State log:</h2>
+      <pre id="log"></pre>
+
+      <style>
+        h2 {
+          margin-bottom: 1rem;
+        }
+        :host > div {
+          display: flex;
+          gap: 5rem;
+        }
+        .inputs label {
+          display: flex;
+          gap: 1rem;
+          font-variant-numeric: tabular-nums;
+        }
+
+        #calculation,
+        input {
+          flex: 1;
+        }
+
+        #calculation input {
+          width: 100%;
+          height: 8rem;
+          padding-inline-start: 1rem;
+          font-size: 1.1em;
+        }
+
+        p {
+          text-align: center;
+        }
+        #log {
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+      </style>
     </template>
 
-    <x-define src="#some-random-template" name="reactive-test"> </x-define>
+    <x-define>
+      <template
+        plugin:compile:query="#some-random-template"
+        name="reactive-test"
+      >
+      </template>
+    </x-define>
 
     <main>
-      <!--
-      <x-is src="#app">
+      <x-is plugin:compile:query="#app">
         <template
           id="app"
-          extend="#x-props, #x-events, #x-render"
-          observe="x, y, z"
+          plugin:compile:template-unsafe
+          plugin:compile:instance
+          plugin:compile:extend-unsafe="query:#x-render"
         >
-          <script>
-            Object.assign(this, {
+          <script instance>
+            Object.assign(this.$props, {
               x: 1,
               y: 2,
               z: 3,
@@ -95,9 +455,22 @@
             });
           </script>
 
-</template>
-</x-is> -->
-      <reactive-test id="reactiveTest"></reactive-test>
+          <reactive-test
+            id="reactiveTest"
+            model:x="this.$props.x"
+            model:y="this.$props.y"
+            model:z="this.$props.z"
+            model:calculation="this.$props.calculation"
+          ></reactive-test>
+          <reactive-test
+            id="reactiveTest"
+            model:x="this.$props.x"
+            model:y="this.$props.y"
+            model:z="this.$props.z"
+            model:calculation="this.$props.calculation"
+          ></reactive-test>
+        </template>
+      </x-is>
     </main>
   </body>
 </html>

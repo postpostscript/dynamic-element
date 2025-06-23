@@ -1,5 +1,9 @@
-<template id="x-instance">
-  <script>
+<template
+  id="x-instance"
+  plugin:compile:template-unsafe
+  plugin:compile:instance
+>
+  <script instance>
     this.__proto__.eval__methods ??= {};
     this.__proto__.eval__maxCache ??= 10;
     this.__proto__.eval__prepareCode ??= function (code, argNames) {

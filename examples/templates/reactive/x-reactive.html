@@ -1,10 +1,12 @@
-<template id="x-reactive" extend="#x-instance">
-  <script type="module">
-    console.log("load reactive");
+<template
+  id="x-reactive"
+  plugin:compile:template-unsafe
+  plugin:compile:instance-module
+>
+  <script instance type="module">
     const { Signal } = await import(
       "https://esm.sh/signal-polyfill@0.2.2/es2022/signal-polyfill.mjs"
     );
-    console.log("loaded signal");
 
     this.__proto__.toSignal ??= (value) => {
       if (typeof value === "function") {
@@ -20,10 +22,9 @@
       }
     };
 
-    this.__proto__.SYMBOL_RAW = Symbol("raw");
+    this.__proto__.SYMBOL_RAW ??= Symbol("raw");
     const { SYMBOL_RAW } = this.__proto__;
     this.__proto__.toReactive ??= (object) => {
-      console.log(object);
       if (SYMBOL_RAW in object) {
         return object;
       }
@@ -116,7 +117,7 @@
         pending = true;
         await new Promise((resolve) => {
           queueMicrotask(async () => {
-            await this.init();
+            await this.tick();
             resolve();
           });
         });
@@ -138,9 +139,7 @@
         try {
           const result = callback();
           cleanup = typeof result === "function" ? result : undefined;
-        } catch (e) {
-          console.error(e);
-        }
+        } catch (e) {}
       });
 
       watcher.watch(computed[SYMBOL_RAW]);
@@ -153,7 +152,6 @@
       };
     };
 
-    console.log("set watch");
     this.watch = (source, callback, opts = {}) => {
       const signal = this.toSignal(source);
       const computed = this.toComputed(() => signal.get());
@@ -172,6 +170,5 @@
     };
 
     this.$props = this.toReactive(this.$props ?? {});
-    console.log("done with reactive!");
   </script>
 </template>

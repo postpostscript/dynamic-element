@@ -1,46 +1,38 @@
-<template id="x-define">
+<template
+  id="x-define"
+  plugin:compile:template-unsafe
+  plugin:compile:instance-module
+>
   <slot></slot>
-  <script>
-    const name = this.getAttribute("name");
-    const src = this.getAttribute("src");
-    const formAssociated = this.hasAttribute("formAssociated");
+  <script instance type="module">
+    // import DynamicElement from "../../dist/dynamic-element.js";
 
-    const compiled = src
-      ? DynamicElement.load(src)
-      : DynamicElement.compile(this.children[0]);
+    const source = this.children[0];
 
-    const observedAttributes =
-      compiled.attrs.observe?.reduce(
-        (result, value) =>
-          result.concat(
-            value.split(/,+/).map((pair) => pair.trim().split(/\s+/, 1)[0])
-          ),
-        []
-      ) || [];
+    const name = source.getAttribute("name");
 
-    customElements.define(
+    let context = await DynamicElement.compile(source, {
+      compile: [[DynamicElement.pluginMap.compile["plugins-unsafe"]]],
+    });
+
+    const result = await DynamicElement.runPlugins("define", {
       name,
-      class extends DynamicElement {
-        static observedAttributes = observedAttributes;
-        static formAssociated = formAssociated;
-        internals = this.attachInternals();
-
+      context,
+      cls: class extends DynamicElement {
         compile() {
-          return compiled;
+          return context;
         }
+      },
+      plugins: DynamicElement.combinePlugins(context.plugins ?? {}, {}),
+    });
+    context = result.context;
 
-        attributeChangedCallback(name, old, value) {
-          this.dispatchEvent(
-            new CustomEvent("attributeChanged", {
-              detail: {
-                name,
-                value,
-                old,
-              },
-            })
-          );
-        }
-      }
+    console.log(
+      "defining",
+      name,
+      result
+      // Array.from(result.context.methods).map(([fn]) => fn.toString())
     );
+    customElements.define(result.name, result.cls);
   </script>
 </template>

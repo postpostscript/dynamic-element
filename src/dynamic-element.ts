@@ -1,35 +1,52 @@
-export type TemplateContextMap = WeakMap<HTMLTemplateElement, TemplateContext>;
+export type TemplateContextMap = WeakMap<Element, TemplateContext>;
 
 export type CompiledFunction = Function & {
-  source: any;
+  source?: any;
 };
 
 /** Cached template computations */
 export type TemplateContext = {
   /** Pre-transformed fragment from source template */
-  fragment: DocumentFragment;
+  fragment?: DocumentFragment;
+  source?: Element;
+  plugins: PluginInvocationMap;
+};
 
-  /** Functions replacing original template scripts */
-  methods: Set<CompiledFunction>;
+type MaybePromise<T> = Promise<T> | T;
 
-  attrs: {
-    [name: string]: string[] | undefined;
+export type DynamicElementPluginResult<T> = T;
+
+export type DynamicElementPlugin<T> = (
+  input: DynamicElementPluginResult<T>,
+  argument: unknown
+) => MaybePromise<Partial<DynamicElementPluginResult<T>> | void>;
+
+export type DynamicElementPluginResultMap = {
+  compile: TemplateContext;
+  init: DynamicElement;
+};
+
+export type DynamicElementPluginMap = {
+  [T in keyof DynamicElementPluginResultMap]: {
+    [name: string]: DynamicElementPlugin<DynamicElementPluginResultMap[T]>;
   };
 };
 
+export type PluginResult<K extends keyof DynamicElementPluginResultMap> =
+  DynamicElementPluginResult<DynamicElementPluginResultMap[K]>;
+
+export type Plugin<K extends keyof DynamicElementPluginResultMap> =
+  DynamicElementPlugin<
+    DynamicElementPluginResult<DynamicElementPluginResultMap[K]>
+  >;
+
+export type PluginInvocationMap = {
+  [type: string]:
+    | ([plugin: Plugin<any>, argument: unknown] | undefined)[]
+    | undefined;
+};
+
 const array = Array.from;
-
-const getAttribute = (el: Element, name: string) => {
-  return el.getAttribute(name);
-};
-
-const withQuerySelectorAll = <TElement extends Element, TResult>(
-  query: string,
-  callback: (element: TElement) => TResult,
-  root: Pick<Element, "querySelectorAll"> = document
-): TResult[] => {
-  return array(root.querySelectorAll(query) as NodeListOf<TElement>, callback);
-};
 
 const cloneNode = <T extends Node>(node: T): T => {
   return node.cloneNode(true) as T;
@@ -39,110 +56,98 @@ export default class DynamicElement extends HTMLElement {
   /** Global instance map used to get elements into scripts */
   static instance: { [id: string]: HTMLElement } = {};
 
-  /** Global template templateContext map used to cache template computations */
-  static #templates = new WeakMap<HTMLTemplateElement, TemplateContext>();
-
   static install(tagName: string = "x-is") {
     customElements.define(
       tagName,
+      // @ts-ignore
       (globalThis.DynamicElement = DynamicElement)
     );
   }
 
-  static compile(template: HTMLTemplateElement): TemplateContext {
-    const cached = DynamicElement.#templates.get(template);
-    if (cached) {
-      return cached;
-    }
-
-    let result: TemplateContext = {
-      fragment: cloneNode<DocumentFragment>(template.content),
-      methods: new Set(),
-      attrs: Object.fromEntries(
-        array(template.attributes, (attr) => [attr.name, [attr.value]])
-      ),
-      name: template.getAttribute("id"),
+  static pluginMap: {
+    [type: string]: {
+      [name: string]: Plugin<any>;
     };
+  } = {
+    compile: {},
+    init: {},
+  } satisfies DynamicElementPluginMap;
 
-    withQuerySelectorAll(
-      "script:not([src])",
-      (script: HTMLScriptElement) => {
-        const type = getAttribute(script, "type");
-        if ([null, "text/javascript", "module"].includes(type)) {
-          let code = `{${script.innerHTML}}`;
-          if (type === "module") {
-            code = `return(async()=>${code})()`;
-          }
-          const method = Function(code) as CompiledFunction;
-          method.source = template;
-          result!.methods.add(method);
-          script.remove();
-        }
-      },
-      result.fragment
-    );
+  static registerPlugin<const K extends keyof DynamicElementPluginMap>(
+    type: K,
+    name: string,
+    plugin: DynamicElementPluginMap[K][string]
+  ) {
+    this.pluginMap[type] ??= {};
+    // @ts-ignore
+    this.pluginMap[type][name] = plugin;
+  }
 
-    const extend = getAttribute(template, "extend");
-
-    if (extend) {
-      result = DynamicElement.combine([DynamicElement.load(extend), result]);
+  static async runPlugins<const K extends keyof DynamicElementPluginMap>(
+    type: K,
+    result: PluginResult<K>
+  ): Promise<PluginResult<K>> {
+    let pair: [plugin: Plugin<K>, argument: unknown] | undefined;
+    while ((pair = result.plugins[type]?.shift())) {
+      const [plugin, argument] = pair;
+      const pluginResult = (await plugin(result, argument)) || {};
+      Object.assign(result, pluginResult);
     }
-
-    DynamicElement.#templates.set(template, result);
-
     return result;
   }
 
-  static combine(templateContexts: TemplateContext[]): TemplateContext {
-    const fragment: TemplateContext["fragment"] = new DocumentFragment();
-    const methods = new Set<CompiledFunction>();
-    const attrs: TemplateContext["attrs"] = {};
-
-    console.log("combine", templateContexts);
-
-    templateContexts.forEach((context) => {
-      fragment.append(context.fragment);
-      for (const method of context.methods) {
-        methods.add(method);
+  static getElementPluginMap($el: Element) {
+    const plugins: {
+      [type: string]: [plugin: Plugin<any>, argument: string][];
+    } = {};
+    for (const attr of array($el.attributes)) {
+      const [plugin, type, name] = attr.name.split(":", 3);
+      if (plugin === "plugin") {
+        if (!DynamicElement.pluginMap[type]?.[name]) {
+          console.warn(`plugin not found: ${type} ${name}`);
+          continue;
+        }
+        plugins[type] ??= [];
+        plugins[type].push([DynamicElement.pluginMap[type][name], attr.value]);
       }
-      for (const attrName in context.attrs) {
-        attrs[attrName] ??= [];
-        attrs[attrName].push(...context.attrs[attrName]!);
-      }
-    });
-
-    return {
-      fragment,
-      methods,
-      attrs,
-      name: templateContexts.map((c) => c.name).join(", "),
-    };
+    }
+    return plugins satisfies PluginInvocationMap;
   }
 
-  static load(src: string): TemplateContext {
-    return DynamicElement.combine(
-      withQuerySelectorAll(src, DynamicElement.compile)
-    );
+  static async compile(
+    source: Element,
+    plugins: PluginInvocationMap
+  ): Promise<TemplateContext> {
+    return DynamicElement.runPlugins("compile", {
+      fragment: new DocumentFragment(),
+      source,
+      plugins,
+    });
   }
 
   /** Instance ID used in `DynamicElement.instance` */
   public _id: string = crypto.randomUUID();
 
   /** Shared copy of the source template context */
-  public compile(): TemplateContext {
-    return DynamicElement.load(getAttribute(this, "src")!);
+  public compile(): Promise<TemplateContext> {
+    return DynamicElement.compile(this, this.plugins);
   }
 
-  public methods: Function[];
+  #plugins: PluginInvocationMap;
+  public get plugins() {
+    this.#plugins ??= DynamicElement.getElementPluginMap(this);
+    return this.#plugins;
+  }
+  public set plugins(value) {
+    this.#plugins = value;
+  }
 
   /** Create DocumentFragment to be appended to the shadowRoot */
   public createFragment({
     fragment: sourceFragment,
-    methods,
   }: TemplateContext): DocumentFragment {
-    const fragment = cloneNode<DocumentFragment>(sourceFragment);
+    const fragment = cloneNode<DocumentFragment>(sourceFragment!);
 
-    this.methods = array(methods);
     // execute init script after all of the DOM loads
     const newScript = document.createElement("script");
     newScript.innerHTML = `DynamicElement.instance["${this._id}"].init()`;
@@ -151,21 +156,12 @@ export default class DynamicElement extends HTMLElement {
     return fragment;
   }
 
-  /** Execute the script Function equivalents with `this` accessible */
-  #init = Promise.resolve();
-  public async init() {
-    this.#init = this.#init.then(() => {
-      const instance = this;
-      let fn: Function;
-      while ((fn = instance.methods.shift()!)) {
-        try {
-          const result = fn.call(instance);
-          console.log({ code: fn.toString(), result });
-        } catch (error) {
-          instance.errorCallback(fn as CompiledFunction, error);
-        }
-      }
-    });
+  public init() {
+    this.plugins = DynamicElement.combinePlugins(
+      this.plugins,
+      this.context.plugins
+    );
+    return DynamicElement.runPlugins("init", this);
   }
 
   /** Alias for shadowRoot */
@@ -174,56 +170,36 @@ export default class DynamicElement extends HTMLElement {
   });
 
   #fragment: DocumentFragment;
+  public get fragment() {
+    return this.#fragment;
+  }
+  public set fragment(value) {
+    this.#fragment = value;
+    this.#shadow.replaceChildren(value);
+  }
 
-  connectedCallback() {
+  public context: TemplateContext;
+  async connectedCallback() {
     const instance = this;
     DynamicElement.instance[instance._id] = instance;
-    if (instance.#fragment) {
+    if (instance.fragment) {
       queueMicrotask(instance.init.bind(instance));
     } else {
-      instance.#fragment = instance.createFragment(instance.compile());
-      instance.#shadow.append(instance.#fragment);
+      this.context = await instance.compile();
+      instance.fragment = instance.createFragment(this.context);
     }
-    instance.methods.push(() => {
-      instance.#dispatch("connected");
-    });
   }
   disconnectedCallback() {
     delete DynamicElement.instance[this._id];
     this.#dispatch("disconnected");
   }
 
-  errorCallback(fn: CompiledFunction, error: Error) {
-    let location: [line: number, column: number] = [
-      error.lineNumber,
-      error.columnNumber,
-    ]; // firefox
-
-    if (!location[0]) {
-      // chrome
-      const match =
-        error.stack?.match(/anonymous\>:(\d+):(\d+)[^\n]*(\n[^\n]*init|$)/) ??
-        [];
-      location = [parseInt(match[1]), parseInt(match[2])];
-    }
-
-    const context = location[0]
-      ? [
-          fn.source,
-          "\n" +
-            `${fn}`.split(/\n/g).at(location[0] - 1) +
-            "\n" +
-            " ".repeat(location[1] - 1) +
-            `^\n`,
-        ]
-      : [];
-
-    console.error("Error in", this, ...context, error);
-    this.#dispatch("error", {
-      detail: {
-        error,
-      },
-    });
+  static combinePlugins(a: PluginInvocationMap, b: PluginInvocationMap) {
+    return Object.fromEntries(
+      array(new Set([...Object.keys(a), ...Object.keys(b)]), (type) => {
+        return [type, (a[type] ?? []).concat(b[type] ?? [])];
+      })
+    );
   }
 
   #dispatch(type: string, eventInitDict?: CustomEventInit): boolean {
